@@ -84,7 +84,7 @@ SKIP_AZURE = _get_optional_env("SKIP_AZURE", "0").lower() in ("1", "true", "t", 
 # GEMINI (Google AI)
 # =========================
 GEMINI_API_KEY = _get_required_env("GEMINI_API_KEY")
-GEMINI_MODEL = _get_optional_env("GEMINI_MODEL", "gemini-2.0-flash")
+GEMINI_MODEL = _get_optional_env("GEMINI_MODEL", "gemini-1.5-pro")
 GEMINI_TEMPERATURE = float(_get_optional_env("GEMINI_TEMPERATURE", "0.1"))
 GEMINI_MAX_TOKENS = int(_get_optional_env("GEMINI_MAX_TOKENS", "4096"))
 

@@ -621,28 +621,28 @@ def render_cocacola_tab():
     col1, col2 = st.columns([2, 1])
 
     with col1:
-        st.header("📤 Cargar Factura Coca-Cola")
+        st.header("📤 Cargar Facturas Coca-Cola")
 
-        uploaded_file = st.file_uploader(
-            "Arrastra tu factura de Coca-Cola FEMSA aquí",
+        uploaded_files = st.file_uploader(
+            "Arrastra tus facturas de Coca-Cola FEMSA aquí",
             type=['jpg', 'jpeg', 'png', 'pdf'],
+            accept_multiple_files=True,
             help="Soporta imágenes y PDFs de facturas Coca-Cola FEMSA",
             key="cocacola_uploader"
         )
 
     with col2:
-        st.header("📊 Info del Archivo")
+        st.header("📊 Info de Archivos")
 
-        if uploaded_file:
-            file_name_display = uploaded_file.name[:25] + "..." if len(uploaded_file.name) > 25 else uploaded_file.name
-            st.metric("Nombre", file_name_display)
-            st.metric("Tamaño", f"{uploaded_file.size / 1024:.1f} KB")
-            st.metric("Tipo", uploaded_file.type.split('/')[-1].upper())
+        if uploaded_files:
+            st.metric("Archivos", len(uploaded_files))
+            total_size = sum(f.size for f in uploaded_files) / 1024
+            st.metric("Tamaño Total", f"{total_size:.1f} KB")
         else:
-            st.info("📂 Sin archivo cargado")
+            st.info("📂 Sin archivos cargados")
 
-    # Procesar archivo
-    if uploaded_file:
+    # Procesar archivos
+    if uploaded_files:
         st.markdown("---")
 
         # Botón con estilo Coca-Cola
@@ -650,7 +650,7 @@ def render_cocacola_tab():
         with col_btn2:
             st.markdown('<div class="coca-cola-button">', unsafe_allow_html=True)
             process_button = st.button(
-                "🚀 PROCESAR FACTURA COCA-COLA",
+                f"🚀 PROCESAR {len(uploaded_files)} FACTURA(S) COCA-COLA",
                 type="primary",
                 use_container_width=True,
                 key="process_cocacola"
@@ -658,288 +658,217 @@ def render_cocacola_tab():
             st.markdown('</div>', unsafe_allow_html=True)
 
         if process_button:
-            try:
-                # Leer bytes
-                file_bytes = uploaded_file.read()
+            all_items = []
+            all_validations = []
 
-                # Procesar
-                with st.spinner("🔍 Analizando factura Coca-Cola con IA especializada..."):
-                    start_time = time.time()
-                    result = extract_items_cocacola(file_bytes, uploaded_file.name)
-                    processing_time = time.time() - start_time
+            # Barra de progreso
+            progress_bar = st.progress(0)
+            status_text = st.empty()
 
-                # Extraer items y total de factura
-                items = result.get("items", [])
-                invoice_total = result.get("invoice_total", None)
+            for idx, uploaded_file in enumerate(uploaded_files):
+                progress = (idx + 1) / len(uploaded_files)
+                progress_bar.progress(progress)
+                status_text.text(f"Procesando: {uploaded_file.name} ({idx + 1}/{len(uploaded_files)})")
 
-                if items and len(items) > 0:
+                try:
+                    # Leer bytes
+                    file_bytes = uploaded_file.read()
+
+                    # Procesar
+                    with st.spinner(f"🔍 Analizando {uploaded_file.name}..."):
+                        result = extract_items_cocacola(file_bytes, uploaded_file.name)
+
+                    # Extraer items y total de factura
+                    items = result.get("items", [])
+                    invoice_total = result.get("invoice_total", None)
+
+                    if items:
+                        # Agregar número de factura a cada item
+                        for item in items:
+                            item['Nro_Factura'] = uploaded_file.name
+
+                        all_items.extend(items)
+
+                        # Guardar validación
+                        if 'total_final' in items[0]:
+                            calculated_total = sum(item.get('total_final', 0) for item in items)
+                            all_validations.append({
+                                'Factura': uploaded_file.name,
+                                'Total_Papel': invoice_total,
+                                'Total_Calculado': calculated_total,
+                                'Diferencia': calculated_total - invoice_total if invoice_total else None
+                            })
+
+                except Exception as e:
+                    st.error(f"❌ Error en {uploaded_file.name}: {str(e)}")
+
+            # Limpiar barra de progreso
+            progress_bar.empty()
+            status_text.empty()
+
+            if all_items:
+                st.markdown("---")
+                st.success(f"✅ Procesamiento completado: {len(all_items)} productos extraídos de {len(uploaded_files)} factura(s)")
+
+                # Función para extraer cantidad del paquete desde descripción
+                import re
+                def extract_package_quantity(descripcion):
+                    """Extrae la cantidad de unidades por paquete desde la descripción.
+                    Ejemplo: 'CC80 600CCX6' -> 6, 'FN 500X12' -> 12
+                    """
+                    if not descripcion or not isinstance(descripcion, str):
+                        return None
+                    match = re.search(r'X(\d+)', descripcion, re.IGNORECASE)
+                    if match:
+                        return int(match.group(1))
+                    return None
+
+                # Agregar columna de Costo Unitario a cada item
+                for item in all_items:
+                    desc = item.get('Descripcion', '')
+                    qty_package = extract_package_quantity(desc)
+                    costo_bulto = item.get('costo_x_bulto')
+
+                    if qty_package and costo_bulto and qty_package > 0:
+                        item['costo_unitario'] = round(costo_bulto / qty_package, 2)
+                    else:
+                        item['costo_unitario'] = None
+
+                # Convertir a DataFrame
+                df = pd.DataFrame(all_items)
+
+                # VALIDACIÓN: Tabla comparativa por factura
+                if all_validations:
                     st.markdown("---")
-                    st.success(f"✅ Extracción completada en {processing_time:.2f}s: {len(items)} productos detectados")
+                    st.subheader("✅ Validación de Totales por Factura")
 
-                    # Convertir a DataFrame
-                    df = pd.DataFrame(items)
+                    df_val = pd.DataFrame(all_validations)
 
-                    # VALIDADOR: Comparar total de factura vs suma calculada
-                    if 'total_final' in df.columns:
-                        calculated_total = df['total_final'].sum()
-
-                        # Mostrar validación
-                        st.markdown("---")
-                        st.subheader("✅ Validación de Totales")
-
-                        col_val1, col_val2, col_val3 = st.columns(3)
-
-                        with col_val1:
-                            if invoice_total:
-                                st.metric(
-                                    "📄 Total Factura (Papel)",
-                                    f"${int(invoice_total):,}",
-                                    help="Total extraído del pie de la factura"
-                                )
-                            else:
-                                st.info("⚠️ No se pudo extraer el total de la factura")
-
-                        with col_val2:
-                            st.metric(
-                                "🧮 Suma Total Final (Calculado)",
-                                f"${int(calculated_total):,}",
-                                help="Suma de todos los total_final de los items"
-                            )
-
-                        with col_val3:
-                            if invoice_total:
-                                difference = calculated_total - invoice_total
-                                percentage = abs(difference / invoice_total * 100) if invoice_total != 0 else 0
-
-                                # Determinar estado
-                                if abs(difference) <= 50:
-                                    status = "✅ Exacto"
-                                    status_color = "normal"
-                                elif abs(difference) <= 100:
-                                    status = "✅ OK"
-                                    status_color = "normal"
-                                elif abs(difference) <= 500:
-                                    status = "⚠️ Revisar"
-                                    status_color = "inverse"
-                                else:
-                                    status = "❌ Error"
-                                    status_color = "inverse"
-
-                                st.metric(
-                                    "💠 Diferencia",
-                                    f"${int(difference):,}",
-                                    delta=f"{percentage:.3f}%",
-                                    delta_color=status_color,
-                                    help="Diferencia = Calculado - Factura"
-                                )
-                                st.markdown(f"**Estado:** {status}")
-                            else:
-                                st.info("Sin validación")
-
-                        # Explicación de diferencias
-                        if invoice_total and abs(calculated_total - invoice_total) > 50:
-                            with st.expander("ℹ️ ¿Por qué hay diferencias?"):
-                                st.markdown("""
-                                **Causas comunes de diferencias:**
-                                - **Diferencias < $50**: Normales por efecto redondeo (impuestos por ítem vs global)
-                                - **Diferencias $50-$500**: Posible error de extracción en algún campo
-                                - **Diferencias > $500**: Revisar extracción, probablemente hay errores
-
-                                **Recomendación:** Si la diferencia es mayor a $50, revisa la tabla de productos
-                                para identificar qué campos fueron extraídos incorrectamente.
-                                """)
-
-                    # Mostrar estadísticas clave
-                    st.subheader("📊 Resumen Financiero")
-
-                    col1, col2, col3, col4, col5 = st.columns(5)
-
-                    with col1:
-                        st.metric("🎯 Productos", len(df))
-
-                    with col2:
-                        if 'Cantidad' in df.columns:
-                            total_bultos = df['Cantidad'].sum()
-                            st.metric("📦 Bultos", f"{int(total_bultos):,}")
-
-                    with col3:
-                        if 'neto' in df.columns:
-                            total_neto = df['neto'].sum()
-                            st.metric("💵 Neto", f"${int(total_neto):,}")
-
-                    with col4:
-                        if 'iva_21' in df.columns:
-                            total_iva = df['iva_21'].sum()
-                            st.metric("📊 IVA 21%", f"${int(total_iva):,}")
-
-                    with col5:
-                        if 'total_final' in df.columns:
-                            total_final = df['total_final'].sum()
-                            st.metric("💰 Total Final", f"${int(total_final):,}")
-
-                    # Desglose de impuestos
-                    if all(col in df.columns for col in ['iva_21', 'imp_int', 'iibb_caba', 'iibb_reg_3337']):
-                        st.markdown("---")
-                        st.subheader("🏦 Desglose Detallado de Impuestos")
-
-                        col_tax1, col_tax2, col_tax3, col_tax4 = st.columns(4)
-
-                        with col_tax1:
-                            total_iva = df['iva_21'].sum()
-                            st.metric("🔵 IVA 21%", f"${int(total_iva):,}")
-
-                        with col_tax2:
-                            total_imp_int = df['imp_int'].sum()
-                            st.metric("🟠 Imp. Internos", f"${int(total_imp_int):,}")
-
-                        with col_tax3:
-                            total_iibb_caba = df['iibb_caba'].sum()
-                            st.metric("🟢 IIBB CABA", f"${int(total_iibb_caba):,}")
-
-                        with col_tax4:
-                            total_iibb_3337 = df['iibb_reg_3337'].sum()
-                            st.metric("🟣 IIBB RG 3337", f"${int(total_iibb_3337):,}")
-
-                    # Tabla detallada
-                    st.markdown("---")
-                    st.subheader("📋 Detalle Completo de Productos")
-
-                    # Formatear columnas numéricas para display
-                    df_display = df.copy()
-
-                    # Mapeo de columnas más amigable
-                    column_mapping = {
-                        'Codigo': 'Código',
-                        'Descripcion': 'Descripción',
-                        'Cantidad': 'Cant.',
-                        'PrecioUnitario': 'P.Unit.',
-                        'Subtotal': 'Subtotal',
-                        'bulto': 'Bultos',
-                        'px_bulto': 'P/Bulto',
-                        'desc': 'Desc.',
-                        'neto': 'Neto',
-                        'imp_int': 'Imp.Int.',
-                        'iva_21': 'IVA 21%',
-                        'total': 'Total',
-                        'porc_desc': '%Desc',
-                        'neto_mas_imp_int': 'Neto+II',
-                        'iibb_caba': 'IIBB CABA',
-                        'iibb_reg_3337': 'IIBB 3337',
-                        'total_final': 'Total Final',
-                        'costo_x_bulto': 'Costo/Bulto'
-                    }
-
-                    df_display = df_display.rename(columns=column_mapping)
-
-                    # Formatear números
-                    numeric_cols = ['Cant.', 'P.Unit.', 'Subtotal', 'Bultos', 'P/Bulto',
-                                   'Desc.', 'Neto', 'Imp.Int.', 'IVA 21%', 'Total', 'Neto+II',
-                                   'IIBB CABA', 'IIBB 3337', 'Total Final', 'Costo/Bulto']
-
-                    for col in numeric_cols:
-                        if col in df_display.columns:
-                            df_display[col] = df_display[col].apply(
-                                lambda x: f"{int(x):,}" if pd.notna(x) and x != 0 else "-"
-                            )
-
-                    if '%Desc' in df_display.columns:
-                        df_display['%Desc'] = df_display['%Desc'].apply(
-                            lambda x: f"{float(x)*100:.2f}%" if pd.notna(x) else "-"
-                        )
-
-                    # Mostrar tabla con scroll
-                    st.dataframe(
-                        df_display,
-                        use_container_width=True,
-                        height=500
+                    # Añadir columnas de diferencia y estado
+                    df_val['Diferencia_Abs'] = df_val.apply(
+                        lambda row: abs(row['Diferencia']) if pd.notna(row['Diferencia']) else None,
+                        axis=1
                     )
 
-                    # Gráficos adicionales
-                    st.markdown("---")
-                    st.subheader("📈 Análisis Visual")
+                    def get_status(diff):
+                        if pd.isna(diff):
+                            return "Sin validación"
+                        elif abs(diff) <= 50:
+                            return "✅ Exacto"
+                        elif abs(diff) <= 100:
+                            return "✅ OK"
+                        elif abs(diff) <= 500:
+                            return "⚠️ Revisar"
+                        else:
+                            return "❌ Error"
 
-                    col_chart1, col_chart2 = st.columns(2)
+                    df_val['Estado'] = df_val['Diferencia'].apply(get_status)
 
-                    with col_chart1:
-                        st.markdown("**🏆 Top 5 Productos por Valor Total**")
-                        if 'Descripcion' in df.columns and 'total_final' in df.columns:
-                            top5 = df.nlargest(5, 'total_final')[['Descripcion', 'total_final']]
-                            top5_display = top5.set_index('Descripcion')
-                            st.bar_chart(top5_display, color="#F40009")
+                    # Formatear para display
+                    df_val_display = df_val.copy()
+                    df_val_display['Total_Papel'] = df_val_display['Total_Papel'].apply(
+                        lambda x: f"${int(x):,}" if pd.notna(x) else "N/A"
+                    )
+                    df_val_display['Total_Calculado'] = df_val_display['Total_Calculado'].apply(
+                        lambda x: f"${int(x):,}" if pd.notna(x) else "N/A"
+                    )
+                    df_val_display['Diferencia'] = df_val_display['Diferencia'].apply(
+                        lambda x: f"${int(x):,}" if pd.notna(x) else "N/A"
+                    )
 
-                    with col_chart2:
-                        st.markdown("**📦 Top 5 Productos por Cantidad**")
-                        if 'Descripcion' in df.columns and 'Cantidad' in df.columns:
-                            top5_qty = df.nlargest(5, 'Cantidad')[['Descripcion', 'Cantidad']]
-                            top5_qty_display = top5_qty.set_index('Descripcion')
-                            st.bar_chart(top5_qty_display, color="#1f77b4")
+                    # Seleccionar columnas para mostrar
+                    df_val_display = df_val_display[['Factura', 'Total_Papel', 'Total_Calculado', 'Diferencia', 'Estado']]
 
-                    # Análisis de rentabilidad
-                    st.markdown("---")
-                    st.subheader("💡 Análisis de Rentabilidad")
+                    st.dataframe(df_val_display, use_container_width=True)
 
-                    col_r1, col_r2, col_r3 = st.columns(3)
+                # Tabla detallada de productos
+                st.markdown("---")
+                st.subheader("📋 Detalle Completo de Productos")
 
-                    with col_r1:
-                        if 'desc' in df.columns and 'total' in df.columns:
-                            total_desc = df['desc'].sum()
-                            total_bruto = df['total'].sum()
-                            if total_bruto > 0:
-                                avg_discount = (total_desc / total_bruto) * 100
-                                st.metric("📉 % Descuento Promedio", f"{avg_discount:.2f}%")
+                # Formatear columnas numéricas para display
+                df_display = df.copy()
 
-                    with col_r2:
-                        if 'total_final' in df.columns and 'Cantidad' in df.columns:
-                            costo_promedio_bulto = df['total_final'].sum() / df['Cantidad'].sum()
-                            st.metric("📊 Costo Prom. por Bulto", f"${int(costo_promedio_bulto):,}")
+                # Mapeo de columnas más amigable (incluye Nro_Factura y costo_unitario)
+                column_mapping = {
+                    'Nro_Factura': 'Nro. Factura',
+                    'Codigo': 'Código',
+                    'Descripcion': 'Descripción',
+                    'Cantidad': 'Cant.',
+                    'PrecioUnitario': 'P.Unit.',
+                    'Subtotal': 'Subtotal',
+                    'bulto': 'Bultos',
+                    'px_bulto': 'P/Bulto',
+                    'desc': 'Desc.',
+                    'neto': 'Neto',
+                    'imp_int': 'Imp.Int.',
+                    'iva_21': 'IVA 21%',
+                    'total': 'Total',
+                    'porc_desc': '%Desc',
+                    'neto_mas_imp_int': 'Neto+II',
+                    'iibb_caba': 'IIBB CABA',
+                    'iibb_reg_3337': 'IIBB 3337',
+                    'total_final': 'Total Final',
+                    'costo_x_bulto': 'Costo/Bulto',
+                    'costo_unitario': 'Costo Unitario'
+                }
 
-                    with col_r3:
-                        if all(col in df.columns for col in ['iva_21', 'imp_int', 'iibb_caba', 'iibb_reg_3337', 'neto']):
-                            total_impuestos = (df['iva_21'].sum() + df['imp_int'].sum() +
-                                             df['iibb_caba'].sum() + df['iibb_reg_3337'].sum())
-                            total_neto = df['neto'].sum()
-                            if total_neto > 0:
-                                presion_fiscal = (total_impuestos / total_neto) * 100
-                                st.metric("🏛️ Presión Fiscal", f"{presion_fiscal:.2f}%")
+                df_display = df_display.rename(columns=column_mapping)
 
-                    # Botón de descarga
-                    st.markdown("---")
-                    st.subheader("💾 Descargar Resultados")
+                # Formatear números con punto decimal (ej: 4.535)
+                numeric_cols = ['Cant.', 'P.Unit.', 'Subtotal', 'Bultos', 'P/Bulto',
+                               'Desc.', 'Neto', 'Imp.Int.', 'IVA 21%', 'Total', 'Neto+II',
+                               'IIBB CABA', 'IIBB 3337', 'Total Final', 'Costo/Bulto']
 
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    filename = f"cocacola_factura_{timestamp}.xlsx"
-
-                    excel_bytes = create_excel_download(items, "cocacola")
-
-                    col_dl1, col_dl2, col_dl3 = st.columns([1, 2, 1])
-                    with col_dl2:
-                        st.download_button(
-                            label="📥 Descargar Excel Detallado (18 Campos)",
-                            data=excel_bytes,
-                            file_name=filename,
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            type="primary",
-                            use_container_width=True,
-                            key="download_cocacola"
+                for col in numeric_cols:
+                    if col in df_display.columns:
+                        df_display[col] = df_display[col].apply(
+                            lambda x: f"{int(x):,.0f}".replace(",", ".") if pd.notna(x) and x != 0 else "-"
                         )
 
-                    st.success(f"✅ Archivo Excel generado: {filename}")
+                # Formatear Costo Unitario con 2 decimales
+                if 'Costo Unitario' in df_display.columns:
+                    df_display['Costo Unitario'] = df_display['Costo Unitario'].apply(
+                        lambda x: f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") if pd.notna(x) else "-"
+                    )
 
-                else:
-                    st.warning("⚠️ No se pudieron extraer ítems de esta factura")
-                    st.info("Verifica que el archivo sea una factura de Coca-Cola FEMSA con la estructura esperada.")
+                if '%Desc' in df_display.columns:
+                    df_display['%Desc'] = df_display['%Desc'].apply(
+                        lambda x: f"{float(x)*100:.2f}%" if pd.notna(x) else "-"
+                    )
 
-            except ValueError as ve:
-                st.error(f"❌ Error de validación: {str(ve)}")
-                with st.expander("🔍 Ver detalles del error"):
-                    st.code(str(ve))
-            except Exception as e:
-                st.error(f"❌ Error procesando factura: {str(e)}")
-                logger.error(f"Error en Coca-Cola extractor: {e}", exc_info=True)
+                # Mostrar tabla con scroll
+                st.dataframe(
+                    df_display,
+                    use_container_width=True,
+                    height=500
+                )
 
-                with st.expander("🔍 Ver detalles técnicos del error"):
-                    st.code(str(e))
-                    st.info("Si el error persiste, verifica que la factura tenga el formato de Coca-Cola FEMSA.")
+                # Botón de descarga
+                st.markdown("---")
+                st.subheader("💾 Descargar Resultados")
+
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"cocacola_facturas_{timestamp}.xlsx"
+
+                excel_bytes = create_excel_download(all_items, "cocacola")
+
+                col_dl1, col_dl2, col_dl3 = st.columns([1, 2, 1])
+                with col_dl2:
+                    st.download_button(
+                        label="📥 Descargar Excel Completo",
+                        data=excel_bytes,
+                        file_name=filename,
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        type="primary",
+                        use_container_width=True,
+                        key="download_cocacola"
+                    )
+
+                st.success(f"✅ Archivo Excel generado: {filename}")
+
+            else:
+                st.warning("⚠️ No se pudieron extraer ítems de las facturas")
+                st.info("Verifica que los archivos sean facturas de Coca-Cola FEMSA con la estructura esperada.")
 
     else:
         # Mensaje de bienvenida
