@@ -11,7 +11,13 @@ PROMPT = """
 Proveedor: COCA-COLA FEMSA de Buenos Aires S.A.
 
 Objetivo: Extraer y procesar la información de la factura/remito con cálculos de costeo precisos.
-Devolver SOLO un JSON cuya RAÍZ sea una **lista** de objetos con las claves EXACTAS:
+Devolver un JSON con la siguiente estructura:
+{
+  "invoice_total": <número entero del IMP.TOTAL o TOTAL de la factura>,
+  "items": [<lista de objetos con los campos de cada producto>]
+}
+
+Cada objeto en "items" debe tener las claves EXACTAS:
 ["Codigo","Descripcion","Cantidad","PrecioUnitario","Subtotal","bulto","px_bulto","desc","neto","imp_int","iva_21","total","porc_desc","neto_mas_imp_int","iibb_caba","iibb_reg_3337","total_final","costo_x_bulto"]
 
 REGLAS FUNDAMENTALES:
@@ -73,28 +79,31 @@ CASOS ESPECIALES:
 - Mantener orden exacto de aparición
 
 SALIDA:
-JSON con lista de objetos, cada uno con TODOS los campos calculados.
+JSON con "invoice_total" (total de la factura del pie) y "items" (lista de productos).
 Ejemplo de estructura (con valores ficticios):
-[
-  {
-    "Codigo": "2843",
-    "Descripcion": "CC80 600CCX6.",
-    "Cantidad": 2016,
-    "PrecioUnitario": 8581,
-    "Subtotal": 7092637,
-    "bulto": 2016,
-    "px_bulto": 8581,
-    "desc": 914935,
-    "neto": 7092637,
-    "imp_int": 79563,
-    "iva_21": 192136,
-    "total": 17299296,
-    "porc_desc": 0.0529,
-    "neto_mas_imp_int": 7172200,
-    "iibb_caba": 14863,
-    "iibb_reg_3337": 1000,
-    "total_final": 7380199,
-    "costo_x_bulto": 3661
-  }
-]
+{
+  "invoice_total": 238358,
+  "items": [
+    {
+      "Codigo": "2843",
+      "Descripcion": "CC80 600CCX6.",
+      "Cantidad": 2016,
+      "PrecioUnitario": 8581,
+      "Subtotal": 7092637,
+      "bulto": 2016,
+      "px_bulto": 8581,
+      "desc": 914935,
+      "neto": 7092637,
+      "imp_int": 79563,
+      "iva_21": 192136,
+      "total": 17299296,
+      "porc_desc": 0.0529,
+      "neto_mas_imp_int": 7172200,
+      "iibb_caba": 14863,
+      "iibb_reg_3337": 1000,
+      "total_final": 7380199,
+      "costo_x_bulto": 3661
+    }
+  ]
+}
 """

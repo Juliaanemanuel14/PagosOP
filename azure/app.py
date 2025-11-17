@@ -220,7 +220,7 @@ def extract_items_azure(file_bytes: bytes) -> List[Dict]:
     return items
 
 
-def extract_items_cocacola(file_bytes: bytes, filename: str) -> List[Dict]:
+def extract_items_cocacola(file_bytes: bytes, filename: str) -> Dict:
     """
     Extrae items de facturas de Coca-Cola FEMSA usando el plugin específico + Gemini.
 
@@ -229,7 +229,7 @@ def extract_items_cocacola(file_bytes: bytes, filename: str) -> List[Dict]:
         filename: Nombre del archivo
 
     Returns:
-        Lista de ítems con los 18 campos de Coca-Cola
+        Dict con {"items": lista de ítems, "invoice_total": total de factura}
     """
     try:
         # Cargar plugin de Coca-Cola
@@ -291,13 +291,25 @@ def extract_items_cocacola(file_bytes: bytes, filename: str) -> List[Dict]:
         response_text = response_text.strip()
 
         # Parsear JSON
-        items = json.loads(response_text)
+        result = json.loads(response_text)
+
+        # Manejar ambos formatos: nuevo (con invoice_total) y antiguo (solo lista)
+        if isinstance(result, dict) and "items" in result:
+            items = result["items"]
+            invoice_total = result.get("invoice_total", None)
+        elif isinstance(result, list):
+            items = result
+            invoice_total = None
+        else:
+            raise ValueError("La respuesta no tiene el formato esperado")
 
         if not isinstance(items, list):
-            raise ValueError("La respuesta no es una lista")
+            raise ValueError("Los items no son una lista")
 
         logger.info(f"Extracción exitosa: {len(items)} productos detectados")
-        return items
+
+        # Retornar items y el total de la factura
+        return {"items": items, "invoice_total": invoice_total}
 
     except json.JSONDecodeError as je:
         logger.error(f"Error parseando JSON: {je}")
@@ -653,8 +665,12 @@ def render_cocacola_tab():
                 # Procesar
                 with st.spinner("🔍 Analizando factura Coca-Cola con IA especializada..."):
                     start_time = time.time()
-                    items = extract_items_cocacola(file_bytes, uploaded_file.name)
+                    result = extract_items_cocacola(file_bytes, uploaded_file.name)
                     processing_time = time.time() - start_time
+
+                # Extraer items y total de factura
+                items = result.get("items", [])
+                invoice_total = result.get("invoice_total", None)
 
                 if items and len(items) > 0:
                     st.markdown("---")
@@ -662,6 +678,76 @@ def render_cocacola_tab():
 
                     # Convertir a DataFrame
                     df = pd.DataFrame(items)
+
+                    # VALIDADOR: Comparar total de factura vs suma calculada
+                    if 'total_final' in df.columns:
+                        calculated_total = df['total_final'].sum()
+
+                        # Mostrar validación
+                        st.markdown("---")
+                        st.subheader("✅ Validación de Totales")
+
+                        col_val1, col_val2, col_val3 = st.columns(3)
+
+                        with col_val1:
+                            if invoice_total:
+                                st.metric(
+                                    "📄 Total Factura (Papel)",
+                                    f"${int(invoice_total):,}",
+                                    help="Total extraído del pie de la factura"
+                                )
+                            else:
+                                st.info("⚠️ No se pudo extraer el total de la factura")
+
+                        with col_val2:
+                            st.metric(
+                                "🧮 Suma Total Final (Calculado)",
+                                f"${int(calculated_total):,}",
+                                help="Suma de todos los total_final de los items"
+                            )
+
+                        with col_val3:
+                            if invoice_total:
+                                difference = calculated_total - invoice_total
+                                percentage = abs(difference / invoice_total * 100) if invoice_total != 0 else 0
+
+                                # Determinar estado
+                                if abs(difference) <= 50:
+                                    status = "✅ Exacto"
+                                    status_color = "normal"
+                                elif abs(difference) <= 100:
+                                    status = "✅ OK"
+                                    status_color = "normal"
+                                elif abs(difference) <= 500:
+                                    status = "⚠️ Revisar"
+                                    status_color = "inverse"
+                                else:
+                                    status = "❌ Error"
+                                    status_color = "inverse"
+
+                                st.metric(
+                                    "💠 Diferencia",
+                                    f"${int(difference):,}",
+                                    delta=f"{percentage:.3f}%",
+                                    delta_color=status_color,
+                                    help="Diferencia = Calculado - Factura"
+                                )
+                                st.markdown(f"**Estado:** {status}")
+                            else:
+                                st.info("Sin validación")
+
+                        # Explicación de diferencias
+                        if invoice_total and abs(calculated_total - invoice_total) > 50:
+                            with st.expander("ℹ️ ¿Por qué hay diferencias?"):
+                                st.markdown("""
+                                **Causas comunes de diferencias:**
+                                - **Diferencias < $50**: Normales por efecto redondeo (impuestos por ítem vs global)
+                                - **Diferencias $50-$500**: Posible error de extracción en algún campo
+                                - **Diferencias > $500**: Revisar extracción, probablemente hay errores
+
+                                **Recomendación:** Si la diferencia es mayor a $50, revisa la tabla de productos
+                                para identificar qué campos fueron extraídos incorrectamente.
+                                """)
 
                     # Mostrar estadísticas clave
                     st.subheader("📊 Resumen Financiero")
