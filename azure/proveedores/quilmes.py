@@ -10,39 +10,72 @@ PATTERNS = [
 ]
 
 PROMPT = """
-Proveedor: QUILMES (gastronómico).
+Actúa como un procesador de datos experto especializado en facturas de "CERVECERIA Y MALTERIA QUILMES".
+Tu objetivo es generar una tabla exacta al formato solicitado, infiriendo datos de empaque desde la descripción.
 
-Objetivo: devolver SOLO un JSON cuya RAÍZ sea una **lista** de objetos con las claves EXACTAS:
-["Codigo","Descripcion","Cantidad","PrecioUnitario","Subtotal","UnidadMedida"]
+Reglas de Normalización:
+1. Formato numérico: 10.000,00 (Separador de miles punto, decimal coma).
+2. Fechas: dd-mmm (ej. 28-oct).
+3. Si un valor es 0, déjalo como 0,00.
 
-Reglas generales de salida:
-- Devolvés ÚNICAMENTE el JSON (sin texto extra ni fences).
-- Cada objeto representa una línea de detalle de la factura.
-- Respetá el orden natural de lectura de los ítems.
-- Si un dato NO es legible con certeza, usar null.
-- Formato numérico: interpretar coma como separador decimal y punto como separador de miles
-  (p. ej. "81.704,32" => 81704.32). En la salida: sin separadores de miles y con **punto** decimal.
-- Redondear a 2 decimales solo cuando corresponda (PrecioUnitario y Subtotal).
+PASO 1: Datos Globales y Coeficientes
+Extrae del Pie de Factura:
+- TOTAL_NETO_FACTURA: Valor numérico bajo "SUBTOTAL" en el pie (ej. 927903,20).
+- TOTAL_PERC_IB: Valor numérico bajo "PERC.IN.BR." o "CABA RG987/12".
+- TOTAL_PERC_IVA: Valor numérico bajo "PERC.IVA".
 
-Columnas de la factura QUILMES (mapeo estricto):
-- "Codigo": tomar de la columna **COD** (tercera columna del renglón). Debe ser número entero sin puntos ni comas.
-  Si contiene "." o "," no es un código válido -> devolver null.
-- "Descripcion": tomar de la columna **DESCRIPCION** (texto del producto).
-- "Cantidad": tomar de la columna **BULTOS** (primera columna). Extraer el número tal como aparece (puede ser entero o con decimales).
-- "PrecioUnitario": tomar de la columna **PRECIO UNI**. 
-  **No** usar "PREC.UNI.FINAL" ni "PREC.UNI. FINAL" ni "PRECIO FINAL".
-  Si coexistieran "PRECIO UNI" y "PREC.UNI.FINAL", elegir SIEMPRE "PRECIO UNI".
-- "Subtotal": tomar de la columna **SUBTOTAL** (antes de impuestos).
-- "UnidadMedida": tomar de la columna **UNI** (segunda columna, suele ser "PACK", "CAJA", "UNID", etc.).
+Calcula Coeficientes de Prorrateo:
+- COEF_IIBB = TOTAL_PERC_IB / TOTAL_NETO_FACTURA
+- COEF_PERC_IVA = TOTAL_PERC_IVA / TOTAL_NETO_FACTURA
 
-Criterios de extracción:
-- Considerá solo las líneas de detalle (no subtotales, totales, leyendas ni pie).
-- Ignorar columnas de descuento, impuestos (IVA, IMP.INTERNO, INT.NO GRAV.), totales y precios finales.
-- No inventes ítems: si una fila está cortada o es ilegible, devolvé ese registro con los campos que sí estén seguros y el resto en null.
-- Algunas descripciones pueden incluir números, "PET", "LATA", "PACK", etc.: todo eso pertenece a "Descripcion".
+PASO 2: Procesamiento Línea por Línea
+Para cada fila de artículos, extrae y calcula los siguientes campos:
 
-Validaciones:
-- "Codigo" debe ser un entero positivo (sin separadores).
-- "Cantidad", "PrecioUnitario" y "Subtotal" deben ser numéricos. Si viene "-": usar null.
-- Mantener exactamente las claves: ["Codigo","Descripcion","Cantidad","PrecioUnitario","Subtotal","UnidadMedida"].
+A. Extracción Directa (Columnas de la factura):
+- Num de FC: Extraer del encabezado (ej. 9407-06280841).
+- Producto: Columna "DESCRIPCION".
+- Bultos: Columna "BULTOS".
+- Px Lista: Columna "PRECIO UNI".
+- Desc Global ($): Columna "DESCUENTO".
+- Neto: Columna "SUBTOTAL".
+- Imp Int: Columna "IMP.INTERNO".
+- % Imp Int: Columna "%II".
+- IVA $: Columna "IMP. IVA".
+
+B. Lógica de Unidades (Ps y Q):
+- Ps (Pack Size): Analiza el texto de "Producto".
+  - Busca patrones como "x12", "12x", "X6", "6X". El número junto a la X es el Ps.
+  - Si dice "4X6", multiplica 4*6 = 24.
+  - Si no hay patrón, asume 1.
+- Q (Total Unidades) = Bultos * Ps.
+
+C. Cálculos de Estructura de Costos:
+- Familia: Extraer la primera palabra del producto (ej. "PEPSI", "QUILMES", "ECO").
+- Total (Bruto) = Bultos * Px Lista.
+- Desc Uni = (Total - Neto) / Bultos.
+- Desc % = (Total - Neto) / Total.
+- Neto + Imp = Neto + Imp Int.
+- IIBB $ (Prorrateo) = Neto * COEF_IIBB.
+- Perc IVA $ (Prorrateo) = Neto * COEF_PERC_IVA.
+- Final = Neto + Imp Int + IVA $ + IIBB $ + Perc IVA $.
+- Pack Final = Final / Bultos.
+- Unit = Pack Final / Ps.
+
+SALIDA FINAL
+Devolver un JSON con la estructura:
+{
+  "invoice_number": "<número de factura del encabezado>",
+  "invoice_total": <total de la factura>,
+  "items": [<lista de objetos con los campos de cada producto>]
+}
+
+Cada objeto en "items" debe tener las claves EXACTAS:
+["Fecha","Num_de_FC","Producto","Familia","Bultos","Ps","Q","Px_Lista","Desc_Uni","Total","Desc_Global","Desc_Porc","Neto","Imp_Int","Porc_II","Neto_Imp","IVA","IIBB","Perc_IVA","Final","Pack_Final","Unit"]
+
+IMPORTANTE:
+- Todos los valores numéricos deben usar punto como separador decimal (ej. 10000.50)
+- Los porcentajes deben ser decimales (ej. 0.15 para 15%)
+- Si un valor no se puede calcular o no existe, usar null
+- NO añadir texto fuera del JSON
+- Devolver ÚNICAMENTE el JSON (sin fences de código)
 """

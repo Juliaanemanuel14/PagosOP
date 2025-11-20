@@ -137,6 +137,47 @@ st.markdown("""
         box-shadow: 0 6px 12px rgba(244,0,9,0.4) !important;
         transform: translateY(-2px) !important;
     }
+    .quilmes-header {
+        font-size: 2.8rem;
+        color: #003DA5;
+        text-align: center;
+        margin-bottom: 2rem;
+        font-weight: 900;
+        text-shadow: 3px 3px 6px rgba(0,0,0,0.2);
+        letter-spacing: 1px;
+    }
+    .quilmes-box {
+        background: linear-gradient(135deg, #003DA5 0%, #0052CC 50%, #0066FF 100%);
+        padding: 2rem;
+        border-radius: 1.2rem;
+        color: white;
+        margin: 1.5rem 0;
+        box-shadow: 0 6px 12px rgba(0,61,165,0.3);
+    }
+    .quilmes-box h3 {
+        color: white !important;
+        margin: 0;
+        font-size: 1.8rem;
+        font-weight: 900;
+    }
+    .quilmes-box p {
+        color: white !important;
+        margin: 0.8rem 0 0 0;
+        font-size: 1.1rem;
+    }
+    .quilmes-button button {
+        background: linear-gradient(135deg, #003DA5 0%, #0052CC 100%) !important;
+        color: white !important;
+        font-weight: 900 !important;
+        border: none !important;
+        font-size: 1.1rem !important;
+        padding: 1rem 1.5rem !important;
+    }
+    .quilmes-button button:hover {
+        background: linear-gradient(135deg, #0052CC 0%, #003380 100%) !important;
+        box-shadow: 0 6px 12px rgba(0,61,165,0.4) !important;
+        transform: translateY(-2px) !important;
+    }
     div[data-testid="stMetricValue"] {
         font-size: 1.8rem;
         font-weight: bold;
@@ -323,6 +364,112 @@ def extract_items_cocacola(file_bytes: bytes, filename: str) -> Dict:
         raise ValueError(f"Error al parsear respuesta de IA: {str(je)}")
     except Exception as e:
         logger.error(f"Error en extracción Coca-Cola: {e}", exc_info=True)
+        raise e
+
+
+def extract_items_quilmes(file_bytes: bytes, filename: str) -> Dict:
+    """
+    Extrae items de facturas de Quilmes usando el plugin específico + Gemini.
+
+    Args:
+        file_bytes: Contenido del archivo
+        filename: Nombre del archivo
+
+    Returns:
+        Dict con {"items": lista de ítems, "invoice_total": total de factura, "invoice_number": número de factura}
+    """
+    try:
+        # Cargar plugin de Quilmes
+        quilmes_module = importlib.import_module("proveedores.quilmes")
+        prompt = getattr(quilmes_module, "PROMPT", "")
+
+        if not prompt:
+            raise ValueError("No se encontró el prompt de Quilmes")
+
+        logger.info(f"Procesando factura Quilmes: {filename}")
+
+        # Intentar cargar como imagen
+        try:
+            image = Image.open(io.BytesIO(file_bytes))
+            logger.info("Archivo cargado como imagen")
+
+            # Llamar a Gemini con imagen
+            response = model.generate_content([prompt, image])
+            response_text = response.text.strip()
+
+        except Exception as img_error:
+            logger.warning(f"No se pudo cargar como imagen: {img_error}")
+            # Si es PDF, usar Azure para OCR
+            client = DocumentAnalysisClient(
+                endpoint=AZURE_ENDPOINT,
+                credential=AzureKeyCredential(AZURE_KEY)
+            )
+            poller = client.begin_analyze_document(
+                model_id="prebuilt-layout",
+                document=file_bytes
+            )
+            result = poller.result()
+
+            # Extraer texto completo del documento
+            full_text = result.content if hasattr(result, 'content') else ""
+
+            # Si no hay content, extraer de las líneas de cada página
+            if not full_text:
+                full_text = "\n".join([
+                    line.content
+                    for page in result.pages
+                    for line in page.lines
+                ])
+
+            prompt_with_text = f"{prompt}\n\nTEXTO EXTRAÍDO:\n{full_text}"
+
+            # Llamar a Gemini solo con texto
+            response = model.generate_content(prompt_with_text)
+            response_text = response.text.strip()
+
+        # Limpiar respuesta (quitar ```json si existe)
+        response_text = response_text.strip()
+        if response_text.startswith("```json"):
+            response_text = response_text[7:]
+        if response_text.startswith("```"):
+            response_text = response_text[3:]
+        if response_text.endswith("```"):
+            response_text = response_text[:-3]
+        response_text = response_text.strip()
+
+        # Parsear JSON
+        result = json.loads(response_text)
+
+        # Manejar ambos formatos: nuevo (con invoice_total) y antiguo (solo lista)
+        if isinstance(result, dict) and "items" in result:
+            items = result["items"]
+            invoice_total = result.get("invoice_total", None)
+            invoice_number = result.get("invoice_number", None)
+        elif isinstance(result, list):
+            items = result
+            invoice_total = None
+            invoice_number = None
+        else:
+            raise ValueError("La respuesta no tiene el formato esperado")
+
+        if not isinstance(items, list):
+            raise ValueError("Los items no son una lista")
+
+        logger.info(f"Extracción exitosa: {len(items)} productos detectados")
+
+        # Retornar items, total y número de factura
+        return {
+            "items": items,
+            "invoice_total": invoice_total,
+            "invoice_number": invoice_number
+        }
+
+    except json.JSONDecodeError as je:
+        logger.error(f"Error parseando JSON: {je}")
+        logger.error(f"Respuesta recibida: {response_text[:500]}")
+        raise ValueError(f"Error al parsear respuesta de IA: {str(je)}")
+    except Exception as e:
+        logger.error(f"Error en extracción Quilmes: {e}", exc_info=True)
         raise e
 
 
@@ -917,6 +1064,347 @@ def render_cocacola_tab():
             """)
 
 
+def render_quilmes_tab():
+    """Renderiza la pestaña especializada de Quilmes."""
+
+    st.markdown('<h1 class="quilmes-header">🍺 QUILMES</h1>', unsafe_allow_html=True)
+
+    # Banner informativo
+    st.markdown("""
+    <div class="quilmes-box">
+        <h3>🎯 Extracción Especializada de Alta Precisión</h3>
+        <p>
+        <b>Cervecería y Maltería Quilmes S.A.</b><br>
+        Sistema inteligente con 21 campos de datos incluyendo cálculos automáticos de Pack Size (Ps),
+        cantidades totales (Q), estructura de costos, descuentos, impuestos (IIBB, IVA, Imp. Internos)
+        y análisis de costo unitario completo.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    # Información en sidebar
+    with st.sidebar:
+        st.header("📋 Campos Extraídos (21)")
+
+        with st.expander("📦 Datos Básicos", expanded=True):
+            st.markdown("""
+            - Número de Factura
+            - Producto
+            - Familia
+            - Bultos
+            - Pack Size (Ps)
+            - Cantidad Total (Q)
+            """)
+
+        with st.expander("💵 Precios y Descuentos"):
+            st.markdown("""
+            - Precio Lista
+            - Descuento Unitario
+            - Total Bruto
+            - Descuento Global ($)
+            - Descuento %
+            """)
+
+        with st.expander("💰 Subtotales"):
+            st.markdown("""
+            - Neto
+            - Neto + Imp. Internos
+            - Total Final
+            """)
+
+        with st.expander("📊 Impuestos"):
+            st.markdown("""
+            - Impuestos Internos ($)
+            - % Impuestos Internos
+            - IVA 21%
+            - IIBB (Prorrateo)
+            - Perc. IVA (Prorrateo)
+            """)
+
+        with st.expander("🎯 Análisis Final"):
+            st.markdown("""
+            - **Pack Final**
+            - **Costo Unitario**
+            """)
+
+    # Área principal
+    col1, col2 = st.columns([2, 1])
+
+    with col1:
+        st.header("📤 Cargar Facturas Quilmes")
+
+        uploaded_files = st.file_uploader(
+            "Arrastra tus facturas de Quilmes aquí",
+            type=['jpg', 'jpeg', 'png', 'pdf'],
+            accept_multiple_files=True,
+            help="Soporta imágenes y PDFs de facturas Quilmes",
+            key="quilmes_uploader"
+        )
+
+    with col2:
+        st.header("📊 Info de Archivos")
+
+        if uploaded_files:
+            st.metric("Archivos", len(uploaded_files))
+            total_size = sum(f.size for f in uploaded_files) / 1024
+            st.metric("Tamaño Total", f"{total_size:.1f} KB")
+        else:
+            st.info("📂 Sin archivos cargados")
+
+    # Procesar archivos
+    if uploaded_files:
+        st.markdown("---")
+
+        # Botón con estilo Quilmes
+        col_btn1, col_btn2, col_btn3 = st.columns([1, 2, 1])
+        with col_btn2:
+            st.markdown('<div class="quilmes-button">', unsafe_allow_html=True)
+            process_button = st.button(
+                f"🚀 PROCESAR {len(uploaded_files)} FACTURA(S) QUILMES",
+                type="primary",
+                use_container_width=True,
+                key="process_quilmes"
+            )
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        if process_button:
+            all_items = []
+            all_validations = []
+
+            # Barra de progreso
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+
+            for idx, uploaded_file in enumerate(uploaded_files):
+                progress = (idx + 1) / len(uploaded_files)
+                progress_bar.progress(progress)
+                status_text.text(f"Procesando: {uploaded_file.name} ({idx + 1}/{len(uploaded_files)})")
+
+                try:
+                    # Leer bytes
+                    file_bytes = uploaded_file.read()
+
+                    # Procesar
+                    with st.spinner(f"🔍 Analizando {uploaded_file.name}..."):
+                        result = extract_items_quilmes(file_bytes, uploaded_file.name)
+
+                    # Extraer items, total y número de factura
+                    items = result.get("items", [])
+                    invoice_total = result.get("invoice_total", None)
+                    invoice_number = result.get("invoice_number", uploaded_file.name)  # Fallback al nombre de archivo
+
+                    if items:
+                        # Agregar número de factura a cada item si no está presente
+                        for item in items:
+                            if 'Nro_Factura' not in item and 'Num_de_FC' not in item:
+                                item['Nro_Factura'] = invoice_number
+
+                        all_items.extend(items)
+
+                        # Guardar validación si hay total
+                        if 'Final' in items[0] and invoice_total:
+                            calculated_total = sum(item.get('Final', 0) for item in items)
+                            all_validations.append({
+                                'Factura': invoice_number,
+                                'Total_Papel': invoice_total,
+                                'Total_Calculado': calculated_total,
+                                'Diferencia': calculated_total - invoice_total
+                            })
+
+                except Exception as e:
+                    st.error(f"❌ Error en {uploaded_file.name}: {str(e)}")
+
+            # Limpiar barra de progreso
+            progress_bar.empty()
+            status_text.empty()
+
+            if all_items:
+                st.markdown("---")
+                st.success(f"✅ Procesamiento completado: {len(all_items)} productos extraídos de {len(uploaded_files)} factura(s)")
+
+                # Convertir a DataFrame
+                df = pd.DataFrame(all_items)
+
+                # VALIDACIÓN: Tabla comparativa por factura
+                if all_validations:
+                    st.markdown("---")
+                    st.subheader("✅ Validación de Totales por Factura")
+
+                    df_val = pd.DataFrame(all_validations)
+
+                    # Añadir columnas de diferencia y estado
+                    df_val['Diferencia_Abs'] = df_val.apply(
+                        lambda row: abs(row['Diferencia']) if pd.notna(row['Diferencia']) else None,
+                        axis=1
+                    )
+
+                    def get_status(diff):
+                        if pd.isna(diff):
+                            return "Sin validación"
+                        elif abs(diff) <= 50:
+                            return "✅ Exacto"
+                        elif abs(diff) <= 100:
+                            return "✅ OK"
+                        elif abs(diff) <= 500:
+                            return "⚠️ Revisar"
+                        else:
+                            return "❌ Error"
+
+                    df_val['Estado'] = df_val['Diferencia'].apply(get_status)
+
+                    # Formatear para display
+                    df_val_display = df_val.copy()
+                    df_val_display['Total_Papel'] = df_val_display['Total_Papel'].apply(
+                        lambda x: f"${int(x):,}" if pd.notna(x) else "N/A"
+                    )
+                    df_val_display['Total_Calculado'] = df_val_display['Total_Calculado'].apply(
+                        lambda x: f"${int(x):,}" if pd.notna(x) else "N/A"
+                    )
+                    df_val_display['Diferencia'] = df_val_display['Diferencia'].apply(
+                        lambda x: f"${int(x):,}" if pd.notna(x) else "N/A"
+                    )
+
+                    # Seleccionar columnas para mostrar
+                    df_val_display = df_val_display[['Factura', 'Total_Papel', 'Total_Calculado', 'Diferencia', 'Estado']]
+
+                    st.dataframe(df_val_display, use_container_width=True)
+
+                # Tabla detallada de productos
+                st.markdown("---")
+                st.subheader("📋 Detalle Completo de Productos")
+
+                # Formatear columnas numéricas para display
+                df_display = df.copy()
+
+                # Mapeo de columnas más amigable
+                column_mapping = {
+                    'Fecha': 'Fecha',
+                    'Num_de_FC': 'Nro. Factura',
+                    'Nro_Factura': 'Nro. Factura',
+                    'Producto': 'Producto',
+                    'Familia': 'Familia',
+                    'Bultos': 'Bultos',
+                    'Ps': 'Pack Size',
+                    'Q': 'Cant. Total',
+                    'Px_Lista': 'Px Lista',
+                    'Desc_Uni': 'Desc. Unit.',
+                    'Total': 'Total Bruto',
+                    'Desc_Global': 'Desc. $',
+                    'Desc_Porc': '%Desc',
+                    'Neto': 'Neto',
+                    'Imp_Int': 'Imp. Int.',
+                    'Porc_II': '%II',
+                    'Neto_Imp': 'Neto+II',
+                    'IVA': 'IVA',
+                    'IIBB': 'IIBB',
+                    'Perc_IVA': 'Perc. IVA',
+                    'Final': 'Total Final',
+                    'Pack_Final': 'Pack Final',
+                    'Unit': 'Costo Unit.'
+                }
+
+                # Renombrar solo las columnas que existen
+                existing_mappings = {k: v for k, v in column_mapping.items() if k in df_display.columns}
+                df_display = df_display.rename(columns=existing_mappings)
+
+                # Formatear números con separador de miles (punto)
+                numeric_cols = ['Bultos', 'Pack Size', 'Cant. Total', 'Px Lista', 'Desc. Unit.',
+                               'Total Bruto', 'Desc. $', 'Neto', 'Imp. Int.', 'Neto+II',
+                               'IVA', 'IIBB', 'Perc. IVA', 'Total Final', 'Pack Final', 'Costo Unit.']
+
+                for col in numeric_cols:
+                    if col in df_display.columns:
+                        df_display[col] = df_display[col].apply(
+                            lambda x: f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") if pd.notna(x) and x != 0 else "-"
+                        )
+
+                # Formatear porcentajes
+                if '%Desc' in df_display.columns:
+                    df_display['%Desc'] = df_display['%Desc'].apply(
+                        lambda x: f"{float(x)*100:.2f}%" if pd.notna(x) and x != 0 else "-"
+                    )
+
+                if '%II' in df_display.columns:
+                    df_display['%II'] = df_display['%II'].apply(
+                        lambda x: f"{float(x)*100:.2f}%" if pd.notna(x) and x != 0 else "-"
+                    )
+
+                # Mostrar tabla con scroll
+                st.dataframe(
+                    df_display,
+                    use_container_width=True,
+                    height=500
+                )
+
+                # Botón de descarga
+                st.markdown("---")
+                st.subheader("💾 Descargar Resultados")
+
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"quilmes_facturas_{timestamp}.xlsx"
+
+                excel_bytes = create_excel_download(all_items, "quilmes")
+
+                col_dl1, col_dl2, col_dl3 = st.columns([1, 2, 1])
+                with col_dl2:
+                    st.download_button(
+                        label="📥 Descargar Excel Completo",
+                        data=excel_bytes,
+                        file_name=filename,
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        type="primary",
+                        use_container_width=True,
+                        key="download_quilmes"
+                    )
+
+                st.success(f"✅ Archivo Excel generado: {filename}")
+
+            else:
+                st.warning("⚠️ No se pudieron extraer ítems de las facturas")
+                st.info("Verifica que los archivos sean facturas de Quilmes con la estructura esperada.")
+
+    else:
+        # Mensaje de bienvenida
+        st.markdown("---")
+
+        col_welcome1, col_welcome2 = st.columns([1, 1])
+
+        with col_welcome1:
+            st.info("👋 ¡Bienvenido al Extractor Especializado de Quilmes!")
+
+            st.markdown("""
+            ### 🎯 Características Especiales:
+
+            - ✅ **21 campos de datos** extraídos automáticamente
+            - ✅ **Cálculos de Pack Size** inferidos desde descripción
+            - ✅ **Prorrateo preciso** de IIBB y Perc. IVA
+            - ✅ **Análisis financiero** completo por producto
+            - ✅ **Costo unitario** calculado automáticamente
+            - ✅ **Estructura de costos** detallada
+            """)
+
+        with col_welcome2:
+            st.markdown("""
+            ### 📝 Pasos para usar:
+
+            1. **Carga tu factura** de Quilmes (imagen o PDF)
+            2. **Haz clic** en "Procesar Factura Quilmes"
+            3. **Revisa** el análisis detallado con todos los campos
+            4. **Descarga** el Excel con todos los datos
+
+            ### ✅ Formato Esperado:
+
+            Facturas de **Cervecería y Maltería Quilmes S.A.** con:
+
+            - Tabla de productos con bultos, código, descripción
+            - Precio unitario, descuento, subtotal
+            - IVA, Impuestos Internos
+            - Pie con IIBB (PERC.IN.BR.) y total
+            """)
+
+
 def main():
     """Función principal de la aplicación."""
 
@@ -926,9 +1414,10 @@ def main():
     st.markdown("---")
 
     # Tabs principales
-    tab1, tab2 = st.tabs([
+    tab1, tab2, tab3 = st.tabs([
         "📄 Extractor General",
-        "🥤 Coca-Cola FEMSA"
+        "🥤 Coca-Cola FEMSA",
+        "🍺 Quilmes"
     ])
 
     with tab1:
@@ -936,6 +1425,9 @@ def main():
 
     with tab2:
         render_cocacola_tab()
+
+    with tab3:
+        render_quilmes_tab()
 
     # Footer
     st.markdown("---")
