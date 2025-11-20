@@ -1203,15 +1203,19 @@ def render_quilmes_tab():
 
                         all_items.extend(items)
 
-                        # Guardar validación si hay total
-                        if 'Final' in items[0] and invoice_total:
-                            calculated_total = sum(item.get('Final', 0) for item in items)
-                            all_validations.append({
-                                'Factura': invoice_number,
-                                'Total_Papel': invoice_total,
-                                'Total_Calculado': calculated_total,
-                                'Diferencia': calculated_total - invoice_total
-                            })
+                        # Guardar validación si hay total de factura
+                        if invoice_total:
+                            # Intentar calcular el total desde los items
+                            calculated_total = sum(item.get('Final', 0) or 0 for item in items if item.get('Final') is not None)
+
+                            # Solo agregar validación si se pudo calcular un total
+                            if calculated_total > 0:
+                                all_validations.append({
+                                    'Factura': invoice_number,
+                                    'Total_Papel': invoice_total,
+                                    'Total_Calculado': calculated_total,
+                                    'Diferencia': calculated_total - invoice_total
+                                })
 
                 except Exception as e:
                     st.error(f"❌ Error en {uploaded_file.name}: {str(e)}")
