@@ -4,14 +4,16 @@ Usa tabla auxiliar con fuzzy matching para normalizar nombres de productos.
 """
 
 import pandas as pd
+import os
 from typing import Optional, Tuple
 from pathlib import Path
 from rapidfuzz import fuzz, process
 import streamlit as st
 
 
-# Path a la tabla auxiliar (se puede configurar)
-TABLA_AUXILIAR_PATH = r"C:\Users\gesti\OneDrive\Escritorio\Auxiliar de facturas.xlsx"
+# Path a la tabla auxiliar (relativo al proyecto)
+BASE_DIR = Path(__file__).parent
+TABLA_AUXILIAR_PATH = os.path.join(BASE_DIR, "tabla_normalizacion.xlsx")
 
 
 @st.cache_data(ttl=3600)  # Cache por 1 hora
