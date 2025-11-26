@@ -11,29 +11,43 @@ from rapidfuzz import fuzz, process
 import streamlit as st
 
 
-# Path a la tabla auxiliar (relativo al proyecto)
+# Paths a la tabla auxiliar (múltiples fallbacks)
 BASE_DIR = Path(__file__).parent
-TABLA_AUXILIAR_PATH = os.path.join(BASE_DIR, "tabla_normalizacion.xlsx")
+TABLA_AUXILIAR_PATHS = [
+    os.path.join(BASE_DIR, "tabla_normalizacion.xlsx"),  # Mismo directorio que normalizador.py
+    os.path.join(BASE_DIR.parent, "tabla_normalizacion.xlsx"),  # Directorio padre
+    r"C:\Users\gesti\OneDrive\Escritorio\Auxiliar de facturas.xlsx",  # Fallback original
+]
 
 
 @st.cache_data(ttl=3600)  # Cache por 1 hora
-def cargar_tabla_normalizacion(archivo_path: str = TABLA_AUXILIAR_PATH) -> Optional[pd.DataFrame]:
+def cargar_tabla_normalizacion(archivo_path: Optional[str] = None) -> Optional[pd.DataFrame]:
     """
     Carga la tabla de normalización desde Excel.
     Usa cache de Streamlit para no recargar en cada request.
+    Intenta múltiples ubicaciones en orden de prioridad.
 
     Args:
-        archivo_path: Path al archivo Excel con tabla de normalización
+        archivo_path: Path opcional al archivo Excel. Si no se especifica, usa fallbacks.
 
     Returns:
         DataFrame con columnas 'Nombre Gestion' y 'Base', o None si hay error
     """
     try:
-        if not Path(archivo_path).exists():
-            st.warning(f"⚠️ No se encuentra la tabla de normalización en: {archivo_path}")
+        # Si se proporciona un path específico, usarlo
+        paths_a_probar = [archivo_path] if archivo_path else TABLA_AUXILIAR_PATHS
+
+        archivo_encontrado = None
+        for path in paths_a_probar:
+            if path and Path(path).exists():
+                archivo_encontrado = path
+                break
+
+        if not archivo_encontrado:
+            st.warning(f"⚠️ No se encuentra la tabla de normalización. Probé en: {', '.join(str(p) for p in paths_a_probar if p)}")
             return None
 
-        df_aux = pd.read_excel(archivo_path)
+        df_aux = pd.read_excel(archivo_encontrado)
 
         # Validar columnas
         if 'Nombre Gestion' not in df_aux.columns or 'Base' not in df_aux.columns:
