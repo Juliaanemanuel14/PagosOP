@@ -36,6 +36,7 @@ from config import (
 from logger import get_logger
 from connect_gemini import model
 from test import _unwrap_azure_num
+from normalizador import normalizar_dataframe, mostrar_estadisticas_normalizacion
 
 # Configurar logger
 logger = get_logger(__name__)
@@ -713,6 +714,14 @@ def render_general_tab():
 
                 # DataFrame completo
                 df_final = pd.DataFrame(all_items)
+
+                # Normalizar nombres de productos
+                df_final = normalizar_dataframe(df_final, columna_descripcion='Descripcion', umbral_similitud=75, agregar_columnas_debug=True)
+
+                # Mostrar estadísticas de normalización
+                if 'Metodo_Match' in df_final.columns:
+                    mostrar_estadisticas_normalizacion(df_final)
+                    st.markdown("---")
 
                 # Mostrar tabla
                 st.subheader("📋 Vista Previa de Datos")
