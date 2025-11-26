@@ -51,13 +51,23 @@
       </div>
 
       <div class="filter-group">
-        <label for="filterFechaDesde">Desde:</label>
-        <input type="date" id="filterFechaDesde">
+        <label for="filterFechaPagoDesde">Fecha Pago Desde:</label>
+        <input type="date" id="filterFechaPagoDesde">
       </div>
 
       <div class="filter-group">
-        <label for="filterFechaHasta">Hasta:</label>
-        <input type="date" id="filterFechaHasta">
+        <label for="filterFechaPagoHasta">Fecha Pago Hasta:</label>
+        <input type="date" id="filterFechaPagoHasta">
+      </div>
+
+      <div class="filter-group">
+        <label for="filterFechaServicioDesde">Fecha Servicio Desde:</label>
+        <input type="date" id="filterFechaServicioDesde">
+      </div>
+
+      <div class="filter-group">
+        <label for="filterFechaServicioHasta">Fecha Servicio Hasta:</label>
+        <input type="date" id="filterFechaServicioHasta">
       </div>
 
       <div class="filter-group">
@@ -132,13 +142,14 @@
           <tr>
             <th style="width: 50px;"></th>
             <th>ID</th>
-            <th>Fecha</th>
-            <th>Local</th>
-            <th>Moneda</th>
-            <th>Items</th>
-            <th>Total</th>
+            <th>FECHA PAGO</th>
+            <th>FECHA SERVICIO</th>
+            <th>LOCAL</th>
+            <th>MONEDA</th>
+            <th>ITEMS</th>
+            <th>TOTAL</th>
             <th>OP</th>
-            <th>Usuario</th>
+            <th>USUARIO</th>
           </tr>
         </thead>
         <tbody id="pagosTableBody">

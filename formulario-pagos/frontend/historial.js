@@ -1,8 +1,10 @@
 // Elementos del DOM
 const usernameDisplay = document.getElementById('username');
 const searchInput = document.getElementById('searchInput');
-const filterFechaDesde = document.getElementById('filterFechaDesde');
-const filterFechaHasta = document.getElementById('filterFechaHasta');
+const filterFechaPagoDesde = document.getElementById('filterFechaPagoDesde');
+const filterFechaPagoHasta = document.getElementById('filterFechaPagoHasta');
+const filterFechaServicioDesde = document.getElementById('filterFechaServicioDesde');
+const filterFechaServicioHasta = document.getElementById('filterFechaServicioHasta');
 const filterLocal = document.getElementById('filterLocal');
 const filterUsuario = document.getElementById('filterUsuario');
 const filterConcepto = document.getElementById('filterConcepto');
@@ -182,6 +184,7 @@ function renderPagos(pagos) {
       </td>
       <td>${pago.id}</td>
       <td>${formatDate(pago.fecha_pago || pago.fecha)}</td>
+      <td>${formatDate(pago.fecha_servicio || pago.fecha)}</td>
       <td>${pago.local}</td>
       <td>${pago.moneda || 'N/A'}</td>
       <td style="text-align: center;">
@@ -244,7 +247,7 @@ function renderPagos(pagos) {
       }
 
       detailRow.innerHTML = `
-        <td colspan="9" style="padding: 0; background-color: #f9fafb;">
+        <td colspan="10" style="padding: 0; background-color: #f9fafb;">
           <div class="items-detail-container">
             <h4 class="items-detail-header">
               📝 Detalles del Pago #${pago.id}
@@ -369,8 +372,10 @@ function populateFilters() {
 // Aplicar filtros
 function applyFilters() {
   const searchTerm = searchInput.value.toLowerCase().trim();
-  const fechaDesde = filterFechaDesde.value;
-  const fechaHasta = filterFechaHasta.value;
+  const fechaPagoDesde = filterFechaPagoDesde.value;
+  const fechaPagoHasta = filterFechaPagoHasta.value;
+  const fechaServicioDesde = filterFechaServicioDesde.value;
+  const fechaServicioHasta = filterFechaServicioHasta.value;
   const localSeleccionado = filterLocal.value;
   const usuarioSeleccionado = filterUsuario.value;
   const conceptoSeleccionado = filterConcepto.value;
@@ -402,18 +407,32 @@ function applyFilters() {
       matchesSearch = matchesLocal || matchesUsuario || matchesConcepto;
     }
 
-    // Filtro de fecha desde
-    let matchesFechaDesde = true;
-    if (fechaDesde) {
+    // Filtro de fecha pago desde
+    let matchesFechaPagoDesde = true;
+    if (fechaPagoDesde) {
       const pagoFecha = pago.fecha_pago || pago.fecha;
-      matchesFechaDesde = pagoFecha >= fechaDesde;
+      matchesFechaPagoDesde = pagoFecha >= fechaPagoDesde;
     }
 
-    // Filtro de fecha hasta
-    let matchesFechaHasta = true;
-    if (fechaHasta) {
+    // Filtro de fecha pago hasta
+    let matchesFechaPagoHasta = true;
+    if (fechaPagoHasta) {
       const pagoFecha = pago.fecha_pago || pago.fecha;
-      matchesFechaHasta = pagoFecha <= fechaHasta;
+      matchesFechaPagoHasta = pagoFecha <= fechaPagoHasta;
+    }
+
+    // Filtro de fecha servicio desde
+    let matchesFechaServicioDesde = true;
+    if (fechaServicioDesde) {
+      const servicioFecha = pago.fecha_servicio || pago.fecha;
+      matchesFechaServicioDesde = servicioFecha >= fechaServicioDesde;
+    }
+
+    // Filtro de fecha servicio hasta
+    let matchesFechaServicioHasta = true;
+    if (fechaServicioHasta) {
+      const servicioFecha = pago.fecha_servicio || pago.fecha;
+      matchesFechaServicioHasta = servicioFecha <= fechaServicioHasta;
     }
 
     // Filtro de local
@@ -444,7 +463,8 @@ function applyFilters() {
       }
     }
 
-    return matchesSearch && matchesFechaDesde && matchesFechaHasta &&
+    return matchesSearch && matchesFechaPagoDesde && matchesFechaPagoHasta &&
+           matchesFechaServicioDesde && matchesFechaServicioHasta &&
            matchesLocal && matchesUsuario && matchesConcepto;
   });
 
@@ -454,8 +474,10 @@ function applyFilters() {
 
 // Event listeners para filtros
 searchInput.addEventListener('input', applyFilters);
-filterFechaDesde.addEventListener('change', applyFilters);
-filterFechaHasta.addEventListener('change', applyFilters);
+filterFechaPagoDesde.addEventListener('change', applyFilters);
+filterFechaPagoHasta.addEventListener('change', applyFilters);
+filterFechaServicioDesde.addEventListener('change', applyFilters);
+filterFechaServicioHasta.addEventListener('change', applyFilters);
 filterLocal.addEventListener('change', applyFilters);
 filterUsuario.addEventListener('change', applyFilters);
 filterConcepto.addEventListener('change', applyFilters);
@@ -463,8 +485,10 @@ filterConcepto.addEventListener('change', applyFilters);
 // Limpiar filtros
 function clearFilters() {
   searchInput.value = '';
-  filterFechaDesde.value = '';
-  filterFechaHasta.value = '';
+  filterFechaPagoDesde.value = '';
+  filterFechaPagoHasta.value = '';
+  filterFechaServicioDesde.value = '';
+  filterFechaServicioHasta.value = '';
   filterLocal.value = '';
   filterUsuario.value = '';
   filterConcepto.value = '';
