@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const session = require('express-session');
 const pgSession = require('connect-pg-simple')(session);
-const nodemailer = require('nodemailer');
+const { Resend } = require('resend');
 const cors = require('cors');
 const path = require('path');
 const db = require('./db');
@@ -49,16 +49,8 @@ db.initTables().catch(err => {
   console.error('Error al inicializar tablas:', err);
 });
 
-// Configuración de nodemailer
-const transporter = nodemailer.createTransport({
-  host: process.env.EMAIL_HOST,
-  port: process.env.EMAIL_PORT,
-  secure: process.env.EMAIL_SECURE === 'true',
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASSWORD
-  }
-});
+// Configuración de Resend
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 // Middleware de autenticación
 const requireAuth = (req, res, next) => {
@@ -145,180 +137,228 @@ app.get('/api/check-auth', (req, res) => {
 
 // Endpoint POST para recibir datos del formulario
 app.post('/api/pagos', requireAuth, async (req, res) => {
-  const client = await db.getClient();
-
   try {
-    const { local, fecha, items } = req.body;
+    const { locales, proveedor, fechaPago, fechaServicio, moneda, concepto, importe, observacion } = req.body;
     const usuario = req.session.user.username;
 
     // Validación de campos requeridos
-    if (!local || !fecha || !items || !Array.isArray(items) || items.length === 0) {
+    if (!locales || !Array.isArray(locales) || locales.length === 0) {
       return res.status(400).json({
         success: false,
-        message: 'Local, fecha y al menos un item son requeridos'
+        message: 'Debe seleccionar al menos un local'
       });
     }
 
-    // Validar items
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i];
-      if (!item.concepto || !item.importe) {
-        return res.status(400).json({
-          success: false,
-          message: `El item ${i + 1} debe tener concepto e importe`
-        });
-      }
-
-      const importeNum = parseFloat(item.importe);
-      if (isNaN(importeNum) || importeNum <= 0) {
-        return res.status(400).json({
-          success: false,
-          message: `El importe del item ${i + 1} debe ser un número válido mayor a 0`
-        });
-      }
+    if (!proveedor || !proveedor.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'El nombre del proveedor es requerido'
+      });
     }
 
-    // Comenzar transacción
-    await client.query('BEGIN');
+    if (!fechaPago || !fechaServicio) {
+      return res.status(400).json({
+        success: false,
+        message: 'Las fechas de pago y servicio son requeridas'
+      });
+    }
 
-    // Insertar pago principal
+    if (!moneda || !moneda.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'La moneda es requerida'
+      });
+    }
+
+    if (!concepto || !concepto.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'El concepto es requerido'
+      });
+    }
+
+    const importeNum = parseFloat(importe);
+    if (isNaN(importeNum) || importeNum <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'El importe debe ser un número válido mayor a 0'
+      });
+    }
+
+    // Calcular importe por local (dividir el total entre el número de locales)
+    const importePorLocal = importeNum / locales.length;
+
+    // Array para almacenar los IDs de pagos creados
+    const pagoIds = [];
+
+    // Insertar un pago para cada local
     const insertPagoSQL = `
-      INSERT INTO pagos (local, fecha, usuario_registro)
-      VALUES ($1, $2, $3)
+      INSERT INTO pagos (local, proveedor, fecha_pago, fecha_servicio, moneda, concepto, importe, observacion, usuario_registro)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       RETURNING id
     `;
 
-    const pagoResult = await client.query(insertPagoSQL, [local, fecha, usuario]);
-    const pagoId = pagoResult.rows[0].id;
-
-    console.log(`Gasto registrado con ID: ${pagoId} por ${usuario}`);
-
-    // Insertar items del pago
-    const insertItemSQL = `
-      INSERT INTO pago_items (pago_id, concepto, importe, observacion)
-      VALUES ($1, $2, $3, $4)
-    `;
-
-    let totalImporte = 0;
-    for (const item of items) {
-      const importeNum = parseFloat(item.importe);
-      totalImporte += importeNum;
-
-      await client.query(insertItemSQL, [
-        pagoId,
-        item.concepto,
-        importeNum,
-        item.observacion || ''
+    for (const local of locales) {
+      const result = await db.query(insertPagoSQL, [
+        local,
+        proveedor,
+        fechaPago,
+        fechaServicio,
+        moneda,
+        concepto,
+        importePorLocal,
+        observacion || '',
+        usuario
       ]);
+
+      const pagoId = result.rows[0].id;
+      pagoIds.push(pagoId);
+      console.log(`Gasto registrado con ID: ${pagoId} para local ${local} por ${usuario}`);
     }
 
-    // Confirmar transacción
-    await client.query('COMMIT');
+    // Obtener mes y año de fecha_servicio
+    const fechaServicioDate = new Date(fechaServicio + 'T00:00:00');
+    const meses = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+    const mesServicio = meses[fechaServicioDate.getMonth()];
+    const añoServicio = fechaServicioDate.getFullYear();
 
-    // Generar tabla HTML de items para el email
-    let itemsTableHTML = '';
-    items.forEach((item, index) => {
-      const bgColor = index % 2 === 0 ? '#f9fafb' : '#ffffff';
-      itemsTableHTML += `
-        <tr style="background-color: ${bgColor};">
-          <td style="padding: 12px; border: 1px solid #e5e7eb;">${item.concepto}</td>
-          <td style="padding: 12px; border: 1px solid #e5e7eb; color: #10b981; font-weight: 600; text-align: right;">$${parseFloat(item.importe).toFixed(2)}</td>
-          <td style="padding: 12px; border: 1px solid #e5e7eb;">${item.observacion || '-'}</td>
-        </tr>
-      `;
-    });
-
-    // Enviar email
-    const mailOptions = {
-      from: process.env.EMAIL_FROM || process.env.EMAIL_USER,
-      to: process.env.EMAIL_TO,
-      subject: `Nueva Solicitud de Gastos - ${local}`,
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 700px; margin: 0 auto;">
-          <h2 style="color: #4f46e5; border-bottom: 2px solid #4f46e5; padding-bottom: 10px;">
-            Nueva Solicitud de Gastos
-          </h2>
-
-          <table style="width: 100%; border-collapse: collapse; margin-top: 20px;">
-            <tr style="background-color: #f9fafb;">
-              <td style="padding: 12px; border: 1px solid #e5e7eb; font-weight: bold; width: 150px;">ID:</td>
-              <td style="padding: 12px; border: 1px solid #e5e7eb;">#${pagoId}</td>
-            </tr>
-            <tr>
-              <td style="padding: 12px; border: 1px solid #e5e7eb; font-weight: bold;">Local:</td>
-              <td style="padding: 12px; border: 1px solid #e5e7eb;">${local}</td>
-            </tr>
-            <tr style="background-color: #f9fafb;">
-              <td style="padding: 12px; border: 1px solid #e5e7eb; font-weight: bold;">Fecha:</td>
-              <td style="padding: 12px; border: 1px solid #e5e7eb;">${fecha}</td>
-            </tr>
-            <tr>
-              <td style="padding: 12px; border: 1px solid #e5e7eb; font-weight: bold;">Registrado por:</td>
-              <td style="padding: 12px; border: 1px solid #e5e7eb; color: #4f46e5; font-weight: bold;">${usuario}</td>
-            </tr>
-          </table>
-
-          <h3 style="color: #4f46e5; margin-top: 30px; margin-bottom: 15px;">Items del Gasto</h3>
-
-          <table style="width: 100%; border-collapse: collapse;">
-            <thead>
-              <tr style="background-color: #4f46e5; color: white;">
-                <th style="padding: 12px; border: 1px solid #e5e7eb; text-align: left;">Concepto</th>
-                <th style="padding: 12px; border: 1px solid #e5e7eb; text-align: right;">Importe</th>
-                <th style="padding: 12px; border: 1px solid #e5e7eb; text-align: left;">Observación</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${itemsTableHTML}
-            </tbody>
-            <tfoot>
-              <tr style="background-color: #f3f4f6; font-weight: bold;">
-                <td style="padding: 12px; border: 1px solid #e5e7eb;">TOTAL</td>
-                <td style="padding: 12px; border: 1px solid #e5e7eb; color: #10b981; font-size: 18px; text-align: right;">$${totalImporte.toFixed(2)}</td>
-                <td style="padding: 12px; border: 1px solid #e5e7eb;"></td>
-              </tr>
-            </tfoot>
-          </table>
-
-          <hr style="margin: 30px 0; border: none; border-top: 1px solid #e5e7eb;">
-
-          <p style="color: #6b7280; font-size: 14px; text-align: center;">
-            <em>Registro generado automáticamente el ${new Date().toLocaleString('es-ES')}</em>
+    // Información sobre división por locales
+    let localesInfo = '';
+    if (locales.length > 1) {
+      localesInfo = `
+        <div style="background-color: #fef3c7; border-left: 4px solid #f59e0b; padding: 16px; margin: 20px 0; border-radius: 4px;">
+          <p style="margin: 0; color: #92400e; font-weight: 600;">
+            ℹ️ Este gasto se dividió entre ${locales.length} locales:
+          </p>
+          <p style="margin: 8px 0 0 0; color: #92400e;">
+            ${locales.join(', ')}
+          </p>
+          <p style="margin: 8px 0 0 0; color: #92400e;">
+            Importe por local: <strong>$${importePorLocal.toFixed(2)}</strong>
           </p>
         </div>
-      `
-    };
+      `;
+    }
 
-    transporter.sendMail(mailOptions, (error, info) => {
+    // Generar asunto del email
+    const asunto = `Presupuesto ${proveedor} - Periodo: ${mesServicio} ${añoServicio} - Local: ${locales.join(', ')}`;
+
+    // Preparar HTML del email
+    const htmlContent = `
+      <div style="font-family: Arial, sans-serif; max-width: 700px; margin: 0 auto;">
+        <h2 style="color: #4f46e5; border-bottom: 2px solid #4f46e5; padding-bottom: 10px;">
+          Nueva Solicitud de Gastos
+        </h2>
+
+        <table style="width: 100%; border-collapse: collapse; margin-top: 20px;">
+          <tr style="background-color: #f9fafb;">
+            <td style="padding: 12px; border: 1px solid #e5e7eb; font-weight: bold; width: 150px;">IDs:</td>
+            <td style="padding: 12px; border: 1px solid #e5e7eb;">#${pagoIds.join(', #')}</td>
+          </tr>
+          <tr>
+            <td style="padding: 12px; border: 1px solid #e5e7eb; font-weight: bold;">Local(es):</td>
+            <td style="padding: 12px; border: 1px solid #e5e7eb;">${locales.join(', ')}</td>
+          </tr>
+          <tr style="background-color: #f9fafb;">
+            <td style="padding: 12px; border: 1px solid #e5e7eb; font-weight: bold;">Proveedor:</td>
+            <td style="padding: 12px; border: 1px solid #e5e7eb;">${proveedor}</td>
+          </tr>
+          <tr>
+            <td style="padding: 12px; border: 1px solid #e5e7eb; font-weight: bold;">Fecha Pago:</td>
+            <td style="padding: 12px; border: 1px solid #e5e7eb;">${fechaPago}</td>
+          </tr>
+          <tr style="background-color: #f9fafb;">
+            <td style="padding: 12px; border: 1px solid #e5e7eb; font-weight: bold;">Fecha Servicio:</td>
+            <td style="padding: 12px; border: 1px solid #e5e7eb;">${fechaServicio}</td>
+          </tr>
+          <tr>
+            <td style="padding: 12px; border: 1px solid #e5e7eb; font-weight: bold;">Moneda:</td>
+            <td style="padding: 12px; border: 1px solid #e5e7eb;">${moneda}</td>
+          </tr>
+          <tr style="background-color: #f9fafb;">
+            <td style="padding: 12px; border: 1px solid #e5e7eb; font-weight: bold;">Registrado por:</td>
+            <td style="padding: 12px; border: 1px solid #e5e7eb; color: #4f46e5; font-weight: bold;">${usuario}</td>
+          </tr>
+        </table>
+
+        ${localesInfo}
+
+        <h3 style="color: #4f46e5; margin-top: 30px; margin-bottom: 15px;">Detalles del Gasto</h3>
+
+        <table style="width: 100%; border-collapse: collapse;">
+          <tr style="background-color: #f9fafb;">
+            <td style="padding: 12px; border: 1px solid #e5e7eb; font-weight: bold; width: 150px;">Concepto:</td>
+            <td style="padding: 12px; border: 1px solid #e5e7eb;">${concepto}</td>
+          </tr>
+          <tr>
+            <td style="padding: 12px; border: 1px solid #e5e7eb; font-weight: bold;">Importe Total:</td>
+            <td style="padding: 12px; border: 1px solid #e5e7eb; color: #10b981; font-weight: 600; font-size: 18px;">$${importeNum.toFixed(2)}</td>
+          </tr>
+          ${locales.length > 1 ? `
+          <tr style="background-color: #f9fafb;">
+            <td style="padding: 12px; border: 1px solid #e5e7eb; font-weight: bold;">Por Local:</td>
+            <td style="padding: 12px; border: 1px solid #e5e7eb; color: #6b7280; font-weight: 600;">$${importePorLocal.toFixed(2)}</td>
+          </tr>` : ''}
+          ${observacion ? `
+          <tr>
+            <td style="padding: 12px; border: 1px solid #e5e7eb; font-weight: bold;">Observación:</td>
+            <td style="padding: 12px; border: 1px solid #e5e7eb;">${observacion}</td>
+          </tr>` : ''}
+        </table>
+
+        <hr style="margin: 30px 0; border: none; border-top: 1px solid #e5e7eb;">
+
+        <p style="color: #6b7280; font-size: 14px; text-align: center;">
+          <em>Registro generado automáticamente el ${new Date().toLocaleString('es-ES')}</em>
+        </p>
+      </div>
+    `;
+
+    // Enviar email usando Resend
+    try {
+      const { data, error } = await resend.emails.send({
+        from: 'Formulario Pagos <onboarding@resend.dev>',
+        to: ['gastosop10@gmail.com'],
+        subject: asunto,
+        html: htmlContent
+      });
+
       if (error) {
-        console.error('Error al enviar el email:', error);
+        console.error('Error al enviar el email con Resend:', error);
         return res.status(200).json({
           success: true,
           message: 'Gasto registrado correctamente, pero hubo un error al enviar el email',
-          pagoId: pagoId,
+          pagoId: pagoIds[0],
+          pagoIds: pagoIds,
           emailSent: false
         });
       }
 
-      console.log('Email enviado:', info.messageId);
+      console.log('Email enviado con Resend:', data.id);
       res.status(201).json({
         success: true,
         message: 'Gasto registrado y email enviado correctamente',
-        pagoId: pagoId,
+        pagoId: pagoIds[0],
+        pagoIds: pagoIds,
         emailSent: true
       });
-    });
+    } catch (emailError) {
+      console.error('Error al enviar email:', emailError);
+      return res.status(200).json({
+        success: true,
+        message: 'Gasto registrado correctamente, pero hubo un error al enviar el email',
+        pagoId: pagoIds[0],
+        pagoIds: pagoIds,
+        emailSent: false
+      });
+    }
 
   } catch (error) {
-    // Rollback en caso de error
-    await client.query('ROLLBACK');
     console.error('Error en el servidor:', error);
     res.status(500).json({
       success: false,
       message: 'Error interno del servidor'
     });
-  } finally {
-    client.release();
   }
 });
 

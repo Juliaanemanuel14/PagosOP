@@ -4,7 +4,7 @@
   "description": "Aplicación web para registro de pagos con envío de email",
   "main": "backend/server.js",
   "scripts": {
-    "start": "node backend/server.js",
+    "start": "node backend/server-pg.js",
     "dev": "nodemon backend/server.js",
     "init-db": "node backend/init-db.js",
     "migrate-db": "node backend/migrate-db.js",
@@ -35,6 +35,7 @@
     "express-session": "^1.17.3",
     "nodemailer": "^6.9.7",
     "pg": "^8.11.3",
+    "resend": "^6.5.2",
     "sqlite3": "^5.1.7"
   },
   "devDependencies": {
